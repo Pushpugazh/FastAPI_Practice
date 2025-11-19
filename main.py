@@ -1,10 +1,11 @@
 from http.client import HTTPException
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
+
 from schema import UserSchema
 from database import db
-
-from utils import serialize_doc
+from utils import serialize_doc, hash_password, verify_password, create_access_token, get_current_user
 
 app = FastAPI()
 
@@ -22,13 +23,10 @@ def home():
 def register(user: UserSchema):
     user_data = user.model_dump()
 
-    user_info = users_collection.find_one({"userName": user.userName})
+    if users_collection.find_one({"userName": user.userName}):
+        raise HTTPException(status_code=400, detail="Username already exists")
 
-    if user_info:
-        return {
-            "message": "Username already exists"
-        }
-
+    user_data["password"] = hash_password(user.password)
     users_collection.insert_one(user_data)
     return {
         "message": "User sign up successful"
@@ -45,30 +43,31 @@ def user_list():
 @app.post("/log-in")
 def log_in(user: UserSchema):
     user_doc = users_collection.find_one({"userName": user.userName})
-    pass_match = {
-        0 : "Invalid Credentials",
-        1 : "Login Successful"
-    }
 
     if not user_doc:
-        raise HTTPException(status_code=404, detail=f"user {user.userName} not found")
+        raise HTTPException(status_code=404, detail="user not found")
 
-    match = 1 if user_doc['password'] == user.password else 0
+    if not verify_password(user.password, user_doc["password"]):
+        raise HTTPException(status_code=401, detail="Invalid Credentials")
 
+    token = create_access_token(user.model_dump(), 30)
     return {
-        "message": pass_match[match],
-        "userName": user.userName if match else None
+        "message": "User Login successful",
+        "token" : token
     }
 
 
 @app.delete("/delete-users")
-def delete_users(userName: str):
+def delete_users(
+        userName: str,
+        current_user: dict = Depends(get_current_user)
+    ):
     if userName.lower() == "all":
         users_collection.delete_many({})
         message = "All Users deleted Successfully"
     else:
         users_collection.delete_one({"userName": userName})
-        message = f"User : {userName} deleted Successfully"
+        message = f"User : {userName} deleted Successfully by {current_user}"
     return {
         "message": message
     }
